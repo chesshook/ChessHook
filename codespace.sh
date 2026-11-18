@@ -93,32 +93,6 @@ touch "$ROOT/.gitignore"
 for entry in '.secrets/' '.cache/' 'codespace-api.log' 'codespace-api.pid' '__pycache__/' '*.pyc'; do
   grep -qxF "$entry" "$ROOT/.gitignore" || printf '%s\n' "$entry" >> "$ROOT/.gitignore"
 done
-TOKEN_FILE="$ROOT/.secrets/api-token"
-TOKEN_CREATED=0
-if [[ ! -s "$TOKEN_FILE" ]]; then
-  python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > "$TOKEN_FILE"
-  TOKEN_CREATED=1
-fi
-chmod 0600 "$TOKEN_FILE"
-API_TOKEN="$(cat "$TOKEN_FILE")"
-[[ ${#API_TOKEN} -ge 40 ]] || die 'Saved API token is unexpectedly short.'
-
-# Stop only the API process previously started by this script.
-PID_FILE="$ROOT/codespace-api.pid"
-if [[ -s "$PID_FILE" ]]; then
-  OLD_PID="$(cat "$PID_FILE")"
-  if [[ "$OLD_PID" =~ ^[0-9]+$ ]] && kill -0 "$OLD_PID" 2>/dev/null; then
-    OLD_CMD="$(tr '\0' ' ' < "/proc/$OLD_PID/cmdline" 2>/dev/null || true)"
-    if [[ "$OLD_CMD" == *"$ROOT/engine_api.py"* ]]; then
-      kill "$OLD_PID" 2>/dev/null || true
-      for _ in $(seq 1 10); do
-        kill -0 "$OLD_PID" 2>/dev/null || break
-        sleep 1
-      done
-    fi
-  fi
-fi
-
 cat > "$CACHE/engine.env" <<ENV
 SF_THREADS=$THREADS
 SF_HASH_MB=$HASH_MB
