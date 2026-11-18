@@ -1,39 +1,52 @@
 # ChessHook VPS backend
 
-Stockfish 19 analysis backend for an Ubuntu 24.04 VPS. The deployment installs and compiles the official Stockfish 19 source, joins the VPS to your Tailscale network, and runs a small UCI-backed HTTP API under systemd.
+Stockfish 19 analysis backend for Ubuntu 24.04, including both a full VM deployment and a restricted Podman/container deployment.
 
 This repository contains the **server backend only**. It does not inspect another app's process memory, read a device screen, or automate moves in a client app. Client integration is intentionally separate.
 
-## Target deployment
+## Choose the deployment mode
 
-- Ubuntu 24.04 (the bootstrap also accepts Debian-based systems)
-- Stockfish compiled locally with `ARCH=native`
-- CPU thread count set to 90% of the vCPUs visible to the VPS
-- systemd CPU quota capped at the corresponding percentage
-- Service memory ceiling set to 90% of effective available memory at install time
-- Stockfish hash set to 88% of that service memory ceiling
-- HTTP listener bound only to the VPS's Tailscale IPv4 address on port `8765`
-- One analysis search at a time; concurrent analysis requests receive HTTP 429
+### A. Full Ubuntu VPS / VM (systemd + TUN available)
 
-The CPU quota is a ceiling, not an exclusive reservation of physical cores. The memory ceiling is calculated at installation and does not automatically grow if the host later adds RAM.
+Use [vps.sh](vps.sh). It installs Stockfish 19, starts the normal Tailscale interface, and runs the API under systemd. It calculates 90% of visible CPUs for Stockfish threads and applies a systemd CPU quota. It calculates a memory ceiling from effective available memory and sets the Stockfish hash to 88% of that service budget.
 
-## Deploy
+The script stores the Tailscale key in `/etc/chesshook/ts-auth-key` with mode `0600` and reuses it on reruns.
 
-Run this on the actual Ubuntu VPS host as root. Replace the placeholder with your existing Tailscale auth key. The installer saves it locally at `/etc/chesshook/ts-auth-key` with mode `0600`; future reruns reuse the file and do not prompt. The key is never committed to GitHub.
+### B. Podman / restricted container (no systemd and/or no /dev/net/tun)
+
+Use [container.sh](container.sh). This is designed for environments like the current restricted container where PID 1 is `podman-init` and `/dev/net/tun` is absent.
+
+The container path:
+- Runs Tailscale with `--tun=userspace-networking`; no TUN device or systemd is required
+- Migrates an existing key from `/etc/chesshook/ts-auth-key` into the persistent `/config/chesshook/ts-auth-key` path, mode `0600`
+- Stores Tailscale identity under `/config/chesshook/tailscale-state`
+- Listens for the API on `127.0.0.1:8765`; userspace Tailscale forwards incoming tailnet traffic on port 8765 to localhost
+- Configures 90% of visible CPUs as Stockfish threads
+- Calculates the Hash allocation from effective available memory, including a visible cgroup v2 limit where available
+
+The container's host controls CPU and memory cgroup ceilings. This container path cannot create a systemd `CPUQuota`, `MemoryHigh`, or `MemoryMax` service limit from inside the restricted container. It therefore does not claim to reserve CPU cores or enforce a separate per-process memory maximum.
+
+Run the setup command in the existing container. It reuses the key already saved by the earlier bootstrap and does not prompt for it:
 
 ```bash
-sudo bash -c 'set -euo pipefail; install -d -m 0700 /etc/chesshook; umask 077; printf "%s\\n" "PASTE_EXISTING_TAILSCALE_AUTH_KEY_HERE" > /etc/chesshook/ts-auth-key; curl -fsSL https://raw.githubusercontent.com/chesshook/ChessHook/main/vps.sh | bash'
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/chesshook/ChessHook/main/container.sh | bash'
 ```
 
+For automatic startup after the hosting panel restarts the container, set its startup command to:
 
+```bash
+bash /config/chesshook/container-run.sh
+```
 
-This bootstrap creates systemd services and binds to the host's Tailscale interface. Run it on the actual Ubuntu VPS host, not inside a non-systemd application container. Check that `ps -p 1 -o comm=` reports `systemd` and that `/run/systemd/system` exists. A container deployment requires TUN access, `NET_ADMIN` capability, and a supported service manager.
-
-The Tailscale key must be valid for enrolling this VPS. If the VPS disk is fully reset, its local Tailscale state and installed engine are also lost, so bootstrap must be run again.
+The container must retain `/config` across restarts for the Tailscale identity, key file, Stockfish build, and scripts to persist. If the host replaces the container without preserving `/config`, these files must be restored and the node may need to authenticate again.
 
 ## API
 
-After deployment, the installer prints the Tailscale IPv4 address.
+After startup, obtain the container's Tailscale IPv4 address with:
+
+```bash
+tailscale --socket=/run/tailscale/tailscaled.sock ip -4
+```
 
 - Health: `GET http://TAILSCALE_IP:8765/healthz`
 - Analysis: `POST http://TAILSCALE_IP:8765/v1/analyze`
@@ -46,9 +59,18 @@ curl -fsS -X POST 'http://TAILSCALE_IP:8765/v1/analyze' \
   -d '{"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","movetime_ms":1000}'
 ```
 
-See [API.md](API.md) for the request and response contract and [vps.sh](vps.sh) for the complete bootstrap.
+See [API.md](API.md) for the request and response contract.
 
-## Service operations
+## Container diagnostics
+
+```bash
+tail -n 100 /config/chesshook/container.log
+tail -n 100 /config/chesshook/tailscaled.log
+curl -fsS http://127.0.0.1:8765/healthz
+tailscale --socket=/run/tailscale/tailscaled.sock status
+```
+
+## VM service operations
 
 ```bash
 systemctl status chesshook-stockfish --no-pager
@@ -57,4 +79,4 @@ systemctl restart chesshook-stockfish
 tailscale status
 ```
 
-The API is plain HTTP inside the Tailscale network. Restrict tailnet access to trusted devices using your Tailscale access policy. Do not expose TCP port 8765 on a public interface.
+The API is reachable over the tailnet only in the intended network configuration. Restrict access using your Tailscale access policy; do not expose TCP port 8765 on a public interface.
