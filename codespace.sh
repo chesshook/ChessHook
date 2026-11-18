@@ -113,9 +113,9 @@ log "Starting Codespaces API: $THREADS thread(s), Hash=$HASH_MB MiB."
 bash "$ROOT/codespace-start.sh"
 
 if [[ "$TOKEN_CREATED" -eq 1 ]]; then
-  printf '\\nNEW API BEARER TOKEN (save it in your client; it is not committed):\\n%s\\n' "$API_TOKEN"
+  printf '\nNEW API BEARER TOKEN (save it in your client; it is not committed):\n%s\n' "$API_TOKEN"
 else
-  printf '\\nAPI bearer token reused from %s/.secrets/api-token\\n' "$ROOT"
+  printf '\nAPI bearer token reused from %s/.secrets/api-token\n' "$ROOT"
 fi
 printf 'Resources:    %s vCPU thread(s), Hash=%s MiB, effective available RAM=%s MiB\\n' "$THREADS" "$HASH_MB" "$MEM_MB"
 printf 'API logs:     %s/codespace-api.log\\n' "$ROOT"
