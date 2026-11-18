@@ -9,11 +9,17 @@ die() { printf '\n[chesshook-codespace] ERROR: %s\n' "$*" >&2; exit 1; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$ROOT/engine_api.py" ]] || die 'Run this from the ChessHook repository; engine_api.py is missing.'
 [[ -n "${CODESPACES:-}" || -n "${CODESPACE_NAME:-}" ]] || log 'Codespaces environment marker not detected; continuing as a compatible Linux workspace.'
-[[ ${EUID:-$(id -u)} -eq 0 ]] || die 'Run as root in this Codespace so build packages can be installed.'
+if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+  APT_PREFIX=()
+elif command -v sudo >/dev/null 2>&1; then
+  APT_PREFIX=(sudo)
+else
+  die 'Package installation requires root or sudo.'
+fi
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl git build-essential python3
+"${APT_PREFIX[@]}" apt-get update
+"${APT_PREFIX[@]}" apt-get install -y --no-install-recommends ca-certificates curl git build-essential python3
 
 NCPU="$(nproc)"
 THREADS="$NCPU"
@@ -113,40 +119,31 @@ if [[ -s "$PID_FILE" ]]; then
   fi
 fi
 
-log "Launching Stockfish API: $THREADS thread(s), Hash=$HASH_MB MiB."
-nohup env \
-  SF_ENGINE="$ENGINE_BIN" \
-  SF_THREADS="$THREADS" \
-  SF_HASH_MB="$HASH_MB" \
-  SF_MAX_MOVETIME_MS=30000 \
-  SF_BIND_HOST=0.0.0.0 \
-  CHESSHOOK_API_TOKEN="$API_TOKEN" \
-  python3 "$ROOT/engine_api.py" \
-  > "$ROOT/codespace-api.log" 2>&1 </dev/null &
-API_PID=$!
-printf '%s\n' "$API_PID" > "$PID_FILE"
-chmod 0600 "$PID_FILE"
+cat > "$CACHE/engine.env" <<ENV
+SF_THREADS=$THREADS
+SF_HASH_MB=$HASH_MB
+ENV
+chmod 0600 "$CACHE/engine.env"
 
-HEALTH_OK=0
-for _ in $(seq 1 60); do
-  if curl -fsS http://127.0.0.1:8765/healthz >/dev/null 2>&1; then HEALTH_OK=1; break; fi
-  if ! kill -0 "$API_PID" 2>/dev/null; then
-    tail -n 80 "$ROOT/codespace-api.log" || true
-    die 'Stockfish API process exited during startup.'
-  fi
-  sleep 1
-done
-((HEALTH_OK == 1)) || { tail -n 80 "$ROOT/codespace-api.log" || true; die 'Local health check timed out.'; }
-
-log 'Codespaces Stockfish API is running.'
-printf '\nHealth check: http://localhost:8765/healthz\n'
-printf 'Analysis API: http://localhost:8765/v1/analyze\n'
-printf 'Resources:    %s vCPU thread(s), Hash=%s MiB, effective available RAM=%s MiB\n' "$THREADS" "$HASH_MB" "$MEM_MB"
-if [[ "$TOKEN_CREATED" -eq 1 ]]; then
-  printf '\nNEW API BEARER TOKEN (save it in your client; it is not committed):\n%s\n' "$API_TOKEN"
-else
-  printf '\nAPI bearer token reused from %s/.secrets/api-token\n' "$ROOT"
+TOKEN_FILE="$ROOT/.secrets/api-token"
+TOKEN_CREATED=0
+if [[ ! -s "$TOKEN_FILE" ]]; then
+  python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > "$TOKEN_FILE"
+  TOKEN_CREATED=1
 fi
-printf '\nAPI logs:     %s/codespace-api.log\n' "$ROOT"
-printf 'Stop API:     kill "$(cat %s/codespace-api.pid)"\n' "$ROOT"
+chmod 0600 "$TOKEN_FILE"
+API_TOKEN="$(cat "$TOKEN_FILE")"
+[[ ${#API_TOKEN} -ge 40 ]] || die 'Saved API token is unexpectedly short.'
+
+log "Starting Codespaces API: $THREADS thread(s), Hash=$HASH_MB MiB."
+bash "$ROOT/codespace-start.sh"
+
+if [[ "$TOKEN_CREATED" -eq 1 ]]; then
+  printf '\\nNEW API BEARER TOKEN (save it in your client; it is not committed):\\n%s\\n' "$API_TOKEN"
+else
+  printf '\\nAPI bearer token reused from %s/.secrets/api-token\\n' "$ROOT"
+fi
+printf 'Resources:    %s vCPU thread(s), Hash=%s MiB, effective available RAM=%s MiB\\n' "$THREADS" "$HASH_MB" "$MEM_MB"
+printf 'API logs:     %s/codespace-api.log\\n' "$ROOT"
+printf 'Stop API:     kill "$(cat %s/codespace-api.pid)"\\n' "$ROOT"
 printf '\nOpen the Codespaces PORTS panel and keep port 8765 Private.\n'
