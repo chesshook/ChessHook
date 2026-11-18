@@ -1,4 +1,4 @@
-name: Validate backend
+name: Validate Codespaces backend
 
 on:
   push:
@@ -13,8 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check shell syntax
         run: |
-          bash -n vps.sh
-          bash -n container.sh
-          bash -n container-run.sh
-      - name: Check API Python syntax
+          bash -n codespace.sh
+          bash -n codespace-start.sh
+      - name: Check Python syntax
         run: python3 -m py_compile engine_api.py
+      - name: Validate devcontainer JSON
+        run: python3 -m json.tool .devcontainer/devcontainer.json > /dev/null
