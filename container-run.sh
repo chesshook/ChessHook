@@ -38,7 +38,12 @@ else
   TS_PID=""
 fi
 
+API_PID=""
 cleanup() {
+  if [[ -n "${API_PID:-}" ]]; then
+    kill "$API_PID" 2>/dev/null || true
+    wait "$API_PID" 2>/dev/null || true
+  fi
   if [[ -n "${TS_PID:-}" ]]; then
     kill "$TS_PID" 2>/dev/null || true
     wait "$TS_PID" 2>/dev/null || true
@@ -50,7 +55,7 @@ READY=0
 for _ in $(seq 1 90); do
   if tailscale --socket="$SOCKET" ip -4 >/dev/null 2>&1; then READY=1; break; fi
   # A logged-out daemon has no IP yet. Wait for its local API to come up.
-  if [[ -S "$SOCKET" ]]; then break; fi
+  if [[ -S "$SOCKET" ]] && tailscale --socket="$SOCKET" status >/dev/null 2>&1; then break; fi
   sleep 1
 done
 [[ -S "$SOCKET" ]] || die "tailscaled did not create its local API socket; inspect $LOG."
@@ -83,10 +88,12 @@ log "Container CPU allocation is controlled by the Podman host; Stockfish thread
 if ! id chesshook >/dev/null 2>&1; then
   useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin chesshook
 fi
-exec runuser -u chesshook -- env \
+runuser -u chesshook -- env \
   SF_BIND_HOST=127.0.0.1 \
   SF_ENGINE="$BASE/Stockfish/src/stockfish" \
   SF_THREADS="$SF_THREADS" \
   SF_HASH_MB="$SF_HASH_MB" \
   SF_MAX_MOVETIME_MS=30000 \
-  /usr/bin/python3 "$BASE/engine_api.py"
+  /usr/bin/python3 "$BASE/engine_api.py" &
+API_PID=$!
+wait "$API_PID"
