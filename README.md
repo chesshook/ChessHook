@@ -1,82 +1,77 @@
-# ChessHook VPS backend
+# ChessHook Stockfish 19 — GitHub Codespaces backend
 
-Stockfish 19 analysis backend for Ubuntu 24.04, including both a full VM deployment and a restricted Podman/container deployment.
+This repository's deployment target is **GitHub Codespaces**. The supported Codespace profile is Ubuntu 24.04 with at least 2 vCPUs and 8 GB RAM.
 
-This repository contains the **server backend only**. It does not inspect another app's process memory, read a device screen, or automate moves in a client app. Client integration is intentionally separate.
+The backend provides FEN-in / UCI best-move-out chess analysis using the official Stockfish 19 source. It is an analysis API only; it does not inspect another app's process memory, read a device screen, or automate moves in a client app.
 
-## Choose the deployment mode
+## Hardware profile
 
-### A. Full Ubuntu VPS / VM (systemd + TUN available)
+The supplied Codespace reports 2 vCPUs and approximately 8 GiB RAM. The installer:
+- Builds Stockfish 19 with `ARCH=native` using the CPU quota detected inside the Codespace (normally 2 build jobs and 2 engine threads)
+- Calculates currently available memory using `MemAvailable` and any visible cgroup v2 memory limit
+- Assigns at most 65% of that effective available memory to the Stockfish transposition hash, rounded down to a 256 MiB step and capped at 4096 MiB
+- Runs a single analysis search at a time, with requests capped at 30 seconds
 
-Use [vps.sh](vps.sh). It installs Stockfish 19, starts the normal Tailscale interface, and runs the API under systemd. It calculates 90% of visible CPUs for Stockfish threads and applies a systemd CPU quota. It calculates a memory ceiling from effective available memory and sets the Stockfish hash to 88% of that service budget.
+This is not the previous 48-vCPU / 330-GB configuration. Codespaces does not expose that hardware to this workspace.
 
-The script stores the Tailscale key in `/etc/chesshook/ts-auth-key` with mode `0600` and reuses it on reruns.
+## Install and start
 
-### B. Podman / restricted container (no systemd and/or no /dev/net/tun)
-
-Use [container.sh](container.sh). This is designed for environments like the current restricted container where PID 1 is `podman-init` and `/dev/net/tun` is absent.
-
-The container path:
-- Runs Tailscale with `--tun=userspace-networking`; no TUN device or systemd is required
-- Migrates an existing key from `/etc/chesshook/ts-auth-key` into the persistent `/config/chesshook/ts-auth-key` path, mode `0600`
-- Stores Tailscale identity under `/config/chesshook/tailscale-state`
-- Listens for the API on `127.0.0.1:8765`; userspace Tailscale forwards incoming tailnet traffic on port 8765 to localhost
-- Configures 90% of visible CPUs as Stockfish threads
-- Calculates the Hash allocation from effective available memory, including a visible cgroup v2 limit where available
-
-The container's host controls CPU and memory cgroup ceilings. This container path cannot create a systemd `CPUQuota`, `MemoryHigh`, or `MemoryMax` service limit from inside the restricted container. It therefore does not claim to reserve CPU cores or enforce a separate per-process memory maximum.
-
-Run the setup command in the existing container. It reuses the key already saved by the earlier bootstrap and does not prompt for it:
+From the repository root inside the Codespace, run:
 
 ```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/chesshook/ChessHook/main/container.sh | bash'
+git pull --ff-only
+bash ./codespace.sh
 ```
 
-For automatic startup after the hosting panel restarts the container, set its startup command to:
+The installer installs build tools, clones the official Stockfish 19 `sf_19` tag into the ignored `.cache/chesshook/` directory, compiles it, verifies the UCI handshake, generates a strong random API token, and starts the HTTP service.
+
+The API token is stored in `.secrets/api-token` with mode `0600`. The `.secrets/` and `.cache/` directories are git-ignored. Do not remove the token file unless you intend to rotate the API credential.
+
+The devcontainer configuration requests the 2-vCPU / 8-GB Ubuntu profile, forwards port 8765, builds the backend after creation, and starts the API when the Codespace starts. These lifecycle settings apply to newly created or rebuilt Codespaces. In the already-running Codespace, run the commands above once; you can also start the already-built API with:
 
 ```bash
-bash /config/chesshook/container-run.sh
+bash ./codespace-start.sh
 ```
 
-The container must retain `/config` across restarts for the Tailscale identity, key file, Stockfish build, and scripts to persist. If the host replaces the container without preserving `/config`, these files must be restored and the node may need to authenticate again.
+## Port access
+
+Port `8765` is forwarded automatically and is private by default. Use the forwarded HTTPS URL from the Codespaces **PORTS** panel.
+
+- Browser / GitHub-authenticated access: keep the port **Private**
+- External REST clients to a private forwarded port also need the current Codespaces `GITHUB_TOKEN` in an `X-Github-Token` header. That token changes when the Codespace is stopped and restarted.
+- For a phone app that cannot provide the rotating GitHub header, change port 8765 to **Public** in the PORTS panel. Public means anyone who knows the URL can reach it, so keep the ChessHook bearer token secret. Analysis requests still require `Authorization: Bearer YOUR_CHESSHOOK_API_TOKEN`.
+
+Do not commit `.secrets/api-token`, copy it into source code, or put it in a public issue.
 
 ## API
 
-After startup, obtain the container's Tailscale IPv4 address with:
+- Health check: `GET /healthz`
+- Analysis: `POST /v1/analyze`
+
+See [API.md](API.md) for the exact request / response format and authentication requirements.
+
+Example local test from the Codespace:
 
 ```bash
-tailscale --socket=/run/tailscale/tailscaled.sock ip -4
-```
-
-- Health: `GET http://TAILSCALE_IP:8765/healthz`
-- Analysis: `POST http://TAILSCALE_IP:8765/v1/analyze`
-
-Example:
-
-```bash
-curl -fsS -X POST 'http://TAILSCALE_IP:8765/v1/analyze' \
+TOKEN="$(cat .secrets/api-token)"
+curl -fsS http://127.0.0.1:8765/healthz
+curl -fsS -X POST http://127.0.0.1:8765/v1/analyze \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","movetime_ms":1000}'
 ```
 
-See [API.md](API.md) for the request and response contract.
-
-## Container diagnostics
+## Logs and process control
 
 ```bash
-tail -n 100 /config/chesshook/container.log
-tail -n 100 /config/chesshook/tailscaled.log
-curl -fsS http://127.0.0.1:8765/healthz
-tailscale --socket=/run/tailscale/tailscaled.sock status
+tail -n 100 codespace-api.log
+cat .secrets/api-token
+kill "$(cat codespace-api.pid)"
+bash ./codespace-start.sh
 ```
 
-## VM service operations
+## Codespaces lifecycle limitation
 
-```bash
-systemctl status chesshook-stockfish --no-pager
-journalctl -u chesshook-stockfish -f
-systemctl restart chesshook-stockfish
-tailscale status
-```
+A Codespace is a development environment, not a continuously available VPS. By default, an inactive Codespace stops after 30 minutes, and a Codespace has a 12-hour maximum lifetime. When it stops, the API process also stops; it restarts when the Codespace starts again through the devcontainer lifecycle hook. The workspace and ignored token file normally persist across a stop/start, but a deleted/recreated Codespace is a new environment and needs setup again.
 
-The API is reachable over the tailnet only in the intended network configuration. Restrict access using your Tailscale access policy; do not expose TCP port 8765 on a public interface.
+GitHub's lifecycle documentation: [Codespace lifecycle](https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle) · [Port forwarding](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace).
