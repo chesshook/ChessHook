@@ -16,7 +16,7 @@ fi
 [[ -n "${TS_AUTH_KEY:-}" ]] || die "No Tailscale key found. Set TS_AUTH_KEY once; the script will save it locally with mode 0600."
 [[ "$TS_AUTH_KEY" == tskey-auth-* ]] || die 'Unexpected Tailscale auth-key format.'
 umask 077
-printf '%s\\n' "$TS_AUTH_KEY" > "$AUTH_KEY_FILE"
+printf '%s\n' "$TS_AUTH_KEY" > "$AUTH_KEY_FILE"
 chmod 0600 "$AUTH_KEY_FILE"
 
 OS_ID="$(. /etc/os-release && printf '%s' "${ID:-unknown}")"
