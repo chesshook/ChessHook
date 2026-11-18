@@ -1,0 +1,11 @@
+{
+  "name": "ChessHook Stockfish 19",
+  "forwardPorts": [8765],
+  "portsAttributes": {
+    "8765": {
+      "label": "ChessHook Stockfish API",
+      "onAutoForward": "notify",
+      "visibility": "private"
+    }
+  }
+}
