@@ -1,0 +1,6 @@
+.secrets/
+.cache/
+codespace-api.log
+codespace-api.pid
+__pycache__/
+*.pyc
