@@ -117,7 +117,7 @@ if [[ "$TOKEN_CREATED" -eq 1 ]]; then
 else
   printf '\nAPI bearer token reused from %s/.secrets/api-token\n' "$ROOT"
 fi
-printf 'Resources:    %s vCPU thread(s), Hash=%s MiB, effective available RAM=%s MiB\\n' "$THREADS" "$HASH_MB" "$MEM_MB"
-printf 'API logs:     %s/codespace-api.log\\n' "$ROOT"
-printf 'Stop API:     kill "$(cat %s/codespace-api.pid)"\\n' "$ROOT"
+printf 'Resources:    %s vCPU thread(s), Hash=%s MiB, effective available RAM=%s MiB\n' "$THREADS" "$HASH_MB" "$MEM_MB"
+printf 'API logs:     %s/codespace-api.log\n' "$ROOT"
+printf 'Stop API:     kill "$(cat %s/codespace-api.pid)"\n' "$ROOT"
 printf '\nOpen the Codespaces PORTS panel and keep port 8765 Private.\n'
