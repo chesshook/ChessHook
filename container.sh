@@ -79,6 +79,24 @@ if [[ -n "$CG2_REL" ]]; then
     CG_DIR="$(dirname "$CG_DIR")"
   done
 fi
+if [[ -z "$CG2_REL" ]]; then
+  CG1_REL="$(awk -F: '$2 ~ /(^|,)memory(,|$)/ {print $3; exit}' /proc/self/cgroup 2>/dev/null || true)"
+  if [[ -n "$CG1_REL" ]]; then
+    CG_DIR="/sys/fs/cgroup/memory$CG1_REL"
+    while [[ "$CG_DIR" == /sys/fs/cgroup/memory* ]]; do
+      if [[ -r "$CG_DIR/memory.limit_in_bytes" && -r "$CG_DIR/memory.usage_in_bytes" ]]; then
+        MAX="$(cat "$CG_DIR/memory.limit_in_bytes")"; CUR="$(cat "$CG_DIR/memory.usage_in_bytes")"
+        if [[ "$MAX" =~ ^[0-9]+$ && "$CUR" =~ ^[0-9]+$ ]] && ((MAX < 9223372036854771712)); then
+          LEFT=$((MAX > CUR ? MAX - CUR : 0))
+          ((LEFT < MEM_BYTES)) && MEM_BYTES="$LEFT"
+        fi
+      fi
+      [[ "$CG_DIR" == /sys/fs/cgroup/memory ]] && break
+      CG_DIR="$(dirname "$CG_DIR")"
+    done
+  fi
+fi
+
 MEM_MB=$((MEM_BYTES / 1048576))
 ((MEM_MB >= 1024)) || die "Only $MEM_MB MiB effective RAM available; refusing unsafe hash allocation."
 MEM_BUDGET_MB=$((MEM_MB * 90 / 100))
