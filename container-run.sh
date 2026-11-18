@@ -51,11 +51,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-READY=0
-for _ in $(seq 1 90); do
-  if tailscale --socket="$SOCKET" ip -4 >/dev/null 2>&1; then READY=1; break; fi
-  # A logged-out daemon has no IP yet. Wait for its local API to come up.
-  if [[ -S "$SOCKET" ]] && tailscale --socket="$SOCKET" status >/dev/null 2>&1; then break; fi
+for _ in $(seq 1 60); do
+  [[ -S "$SOCKET" ]] && break
   sleep 1
 done
 [[ -S "$SOCKET" ]] || die "tailscaled did not create its local API socket; inspect $LOG."
