@@ -19,11 +19,15 @@ The CPU quota is a ceiling, not an exclusive reservation of physical cores. The 
 
 ## Deploy
 
-Run this on the VPS as a root-capable user. The command prompts for the Tailscale auth key without echoing it, passes it to the installer through the environment, and does not write it to this repository or to the deployment files.
+Run this on the actual Ubuntu VPS host as root. Replace the placeholder with your existing Tailscale auth key. The installer saves it locally at `/etc/chesshook/ts-auth-key` with mode `0600`; future reruns reuse the file and do not prompt. The key is never committed to GitHub.
 
 ```bash
-sudo bash -c 'set -euo pipefail; read -rsp "Tailscale auth key: " TS_AUTH_KEY; printf "\n"; export TS_AUTH_KEY; curl -fsSL https://raw.githubusercontent.com/chesshook/ChessHook/main/vps.sh | bash; unset TS_AUTH_KEY'
+sudo bash -c 'set -euo pipefail; install -d -m 0700 /etc/chesshook; umask 077; printf "%s\\n" "PASTE_EXISTING_TAILSCALE_AUTH_KEY_HERE" > /etc/chesshook/ts-auth-key; curl -fsSL https://raw.githubusercontent.com/chesshook/ChessHook/main/vps.sh | bash'
 ```
+
+
+
+This bootstrap creates systemd services and binds to the host's Tailscale interface. Run it on the actual Ubuntu VPS host, not inside a non-systemd application container. Check that `ps -p 1 -o comm=` reports `systemd` and that `/run/systemd/system` exists. A container deployment requires TUN access, `NET_ADMIN` capability, and a supported service manager.
 
 The Tailscale key must be valid for enrolling this VPS. If the VPS disk is fully reset, its local Tailscale state and installed engine are also lost, so bootstrap must be run again.
 
