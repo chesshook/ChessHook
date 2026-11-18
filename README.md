@@ -27,7 +27,7 @@ The installer installs build tools, clones the official Stockfish 19 `sf_19` tag
 
 The API token is stored in `.secrets/api-token` with mode `0600`. The `.secrets/` and `.cache/` directories are git-ignored. Do not remove the token file unless you intend to rotate the API credential.
 
-The devcontainer configuration requests the 2-vCPU / 8-GB Ubuntu profile, forwards port 8765, builds the backend after creation, and starts the API when the Codespace starts. These lifecycle settings apply to newly created or rebuilt Codespaces. In the already-running Codespace, run the commands above once; you can also start the already-built API with:
+The devcontainer configuration requests the 2-vCPU / 8-GB Ubuntu profile, forwards port 8765, builds the backend after creation, and starts the API when the Codespace starts. These lifecycle settings apply to newly created or rebuilt Codespaces. In the already-running Codespace, run the commands above once. If port 8765 does not appear in the PORTS panel, add it manually there; the printed localhost URL may also trigger automatic forwarding. You can restart the already-built API with:
 
 ```bash
 bash ./codespace-start.sh
