@@ -6,10 +6,25 @@ log() { printf '\n[chesshook-vps] %s\n' "$*"; }
 die() { printf '\n[chesshook-vps] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die 'Run this script as root.'
-[[ -n "${TS_AUTH_KEY:-}" ]] || die 'TS_AUTH_KEY is missing; supply it through the environment.'
+
+# Reuse a root-only local key file so re-runs do not prompt.
+AUTH_KEY_FILE=/etc/chesshook/ts-auth-key
+install -d -m 0700 /etc/chesshook
+if [[ -z "${TS_AUTH_KEY:-}" && -s "$AUTH_KEY_FILE" ]]; then
+  TS_AUTH_KEY="$(cat "$AUTH_KEY_FILE")"
+fi
+[[ -n "${TS_AUTH_KEY:-}" ]] || die "No Tailscale key found. Set TS_AUTH_KEY once; the script will save it locally with mode 0600."
 [[ "$TS_AUTH_KEY" == tskey-auth-* ]] || die 'Unexpected Tailscale auth-key format.'
+umask 077
+printf '%s\\n' "$TS_AUTH_KEY" > "$AUTH_KEY_FILE"
+chmod 0600 "$AUTH_KEY_FILE"
+
 OS_ID="$(. /etc/os-release && printf '%s' "${ID:-unknown}")"
 [[ "$OS_ID" == ubuntu || "$OS_ID" == debian ]] || die "Ubuntu/Debian required; detected $OS_ID."
+
+# This bootstrap installs systemd services and requires a real systemd-managed VPS host.
+PID1="$(ps -p 1 -o comm= 2>/dev/null | tr -d '[:space:]' || true)"
+[[ "$PID1" == "systemd" && -d /run/systemd/system ]] || die "PID 1 is '$PID1', not systemd. This shell is a container/non-systemd environment; run the bootstrap on the Ubuntu VPS host, or provide a TUN-enabled container with a service manager."
 
 NCPU="$(nproc)"
 THREADS=$((NCPU * 90 / 100))
@@ -25,6 +40,7 @@ if ! command -v tailscale >/dev/null 2>&1; then
   log 'Installing Tailscale.'
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
+systemctl daemon-reload
 systemctl enable --now tailscaled
 if ! tailscale ip -4 >/dev/null 2>&1; then
   log 'Joining the tailnet.'
