@@ -2,6 +2,7 @@
 """Single-search HTTP API for a local Stockfish UCI process."""
 import json
 import os
+import hmac
 import queue
 import re
 import subprocess
@@ -14,7 +15,8 @@ ENGINE = os.environ.get("SF_ENGINE", "/opt/chesshook/Stockfish/src/stockfish")
 THREADS = max(1, int(os.environ.get("SF_THREADS", "1")))
 HASH_MB = max(256, int(os.environ.get("SF_HASH_MB", "512")))
 MAX_MOVETIME_MS = max(100, int(os.environ.get("SF_MAX_MOVETIME_MS", "30000")))
-HOST = os.environ.get("SF_BIND_HOST", "127.0.0.1")
+HOST = os.environ.get("SF_BIND_HOST", "0.0.0.0")
+API_TOKEN = os.environ.get("CHESSHOOK_API_TOKEN", "")
 PORT = 8765
 
 PIECE_RE = re.compile(r"^[prnbqkPRNBQK1-8]+$")
@@ -206,6 +208,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if urlsplit(self.path).path != "/v1/analyze":
             self.send_json(404, {"error": "not found"})
+            return
+        if not API_TOKEN:
+            self.send_json(503, {"error": "API authentication is not configured"})
+            return
+        supplied = self.headers.get("Authorization", "")
+        expected = "Bearer " + API_TOKEN
+        if not hmac.compare_digest(supplied, expected):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", "Bearer")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         if not analysis_gate.acquire(blocking=False):
             self.send_json(429, {"error": "engine is busy; retry shortly"})
