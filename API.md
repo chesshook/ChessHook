@@ -1,43 +1,43 @@
 # ChessHook Stockfish API
 
-The API runs on the brain Codespace at \`127.0.0.1:8765\`. The Codespaces Tailscale feature connects that machine to the tailnet, and Tailscale Serve publishes the loopback API over HTTPS **only to tailnet devices**. Do not expose port \`8765\` through a public Codespaces port or Tailscale Funnel.
+The API runs on the brain Codespace at `127.0.0.1:8765`. The Codespaces Tailscale feature connects that machine to the tailnet, and Tailscale Serve publishes the loopback API over HTTPS **only to tailnet devices**. Do not expose port `8765` through a public Codespaces port or Tailscale Funnel.
 
 ## Authentication
 
-Every \`POST\` request requires:
+Every `POST` request requires:
 
-\`Authorization: Bearer YOUR_CHESSHOOK_API_TOKEN\`
+`Authorization: Bearer YOUR_CHESSHOOK_API_TOKEN`
 
-The token is stored at \`.secrets/api-token\` with mode \`0600\`. The \`.secrets/\` directory is git-ignored. Keep the token out of source control, screenshots, chat, and logs. \`GET /healthz\` is unauthenticated and returns only engine readiness and the brain's configured thread/hash values.
+The token is stored at `.secrets/api-token` with mode `0600`. The `.secrets/` directory is git-ignored. Keep the token out of source control, screenshots, chat, and logs. `GET /healthz` is unauthenticated and returns only engine readiness and the brain's configured thread/hash values.
 
 ## Network setup
 
-The repository devcontainer uses the official \`ghcr.io/tailscale/codespace/tailscale\` feature and \`/dev/net/tun\`. Add a Tailscale auth key as the GitHub Codespaces secret \`TS_AUTH_KEY\`, then rebuild the Codespace container. The feature starts \`tailscaled\` and uses the secret for initial authentication. A one-off, tag-restricted key is preferred for provisioning; do not use a broadly reusable key. The feature persists Tailscale device state for the Codespace.
+The repository devcontainer uses the official `ghcr.io/tailscale/codespace/tailscale` feature and `/dev/net/tun`. Add a Tailscale auth key as the GitHub Codespaces secret `TS_AUTH_KEY`, then rebuild the Codespace container. The feature starts `tailscaled` and uses the secret for initial authentication. A one-off, tag-restricted key is preferred for provisioning; do not use a broadly reusable key. The feature persists Tailscale device state for the Codespace.
 
 The start script binds the API to loopback and configures Tailscale Serve to proxy it privately:
 
-\`\`\`bash
+```bash
 sudo tailscale serve --bg http://127.0.0.1:8765
-\`\`\`
+```
 
 Get the private HTTPS URL with:
 
-\`\`\`bash
+```bash
 sudo tailscale serve status
-\`\`\`
+```
 
-Use the resulting \`https://<device>.<tailnet>.ts.net\` origin in ChessHook's **Brain Config**, along with the value from \`cat .secrets/api-token\`. Keep the API private to your tailnet. Tailscale Serve requires HTTPS certificates to be enabled for the tailnet, and tailnet access-control rules still apply.
+Use the resulting `https://<device>.<tailnet>.ts.net` origin in ChessHook's **Brain Config**, along with the value from `cat .secrets/api-token`. Keep the API private to your tailnet. Tailscale Serve requires HTTPS certificates to be enabled for the tailnet, and tailnet access-control rules still apply.
 
 ## Endpoints
 
 | Method | Path | Authentication | Purpose |
 |---|---|---|---|
-| \`GET\` | \`/healthz\` | No | Readiness and fixed brain resources |
-| \`POST\` | \`/v1/analyze\` | Bearer | Synchronous JSON analysis (legacy-compatible) |
-| \`POST\` | \`/v1/analyze/stream\` | Bearer | Streaming NDJSON progress and final result |
-| \`POST\` | \`/v1/stop\` | Bearer | Stop a specific active search |
-| \`POST\` | \`/v1/clear-hash\` | Bearer | Clear Stockfish's transposition table |
-| \`POST\` | \`/v1/newgame\` | Bearer | Send \`ucinewgame\` and clear the transposition table |
+| `GET` | `/healthz` | No | Readiness and fixed brain resources |
+| `POST` | `/v1/analyze` | Bearer | Synchronous JSON analysis (legacy-compatible) |
+| `POST` | `/v1/analyze/stream` | Bearer | Streaming NDJSON progress and final result |
+| `POST` | `/v1/stop` | Bearer | Stop a specific active search |
+| `POST` | `/v1/clear-hash` | Bearer | Clear Stockfish's transposition table |
+| `POST` | `/v1/newgame` | Bearer | Send `ucinewgame` and clear the transposition table |
 
 ## Analysis request
 
@@ -45,57 +45,57 @@ Both analysis endpoints accept a JSON object:
 
 | Field | Type | Required | Meaning |
 |---|---|---:|---|
-| \`fen\` | string | Yes | Current six-field FEN; max 128 chars |
-| \`movetime_ms\` | integer | No | Requested search duration; defaults to 2000 and is clamped to 100–30000 ms |
-| \`startpos\` | boolean | No | Rebuild position from the standard start position and \`moves\` |
-| \`anchor_fen\` | string | No | Starting FEN for \`moves\` when not using \`startpos\` |
-| \`moves\` | string array | No | Up to 512 UCI coordinate moves |
-| \`is_my_turn\` | boolean | No | Retains the app's quick-move stability heuristic; defaults to \`true\` |
-| \`search_id\` | string | No | Client-generated ID (8–80 \`[A-Za-z0-9_-]\` chars) used by \`/v1/stop\`; generated by the server when omitted |
+| `fen` | string | Yes | Current six-field FEN; max 128 chars |
+| `movetime_ms` | integer | No | Requested search duration; defaults to 2000 and is clamped to 100–30000 ms |
+| `startpos` | boolean | No | Rebuild position from the standard start position and `moves` |
+| `anchor_fen` | string | No | Starting FEN for `moves` when not using `startpos` |
+| `moves` | string array | No | Up to 512 UCI coordinate moves |
+| `is_my_turn` | boolean | No | Retains the app's quick-move stability heuristic; defaults to `true` |
+| `search_id` | string | No | Client-generated ID (8–80 `[A-Za-z0-9_-]` chars) used by `/v1/stop`; generated by the server when omitted |
 
-The phone does not send CPU thread or hash-memory controls. \`SF_THREADS\` and \`SF_HASH_MB\` are fixed by the brain Codespace's \`engine.env\`, and the API reports those actual values. Client-provided \`threads\` or \`hash_mb\` fields are ignored.
+The phone does not send CPU thread or hash-memory controls. `SF_THREADS` and `SF_HASH_MB` are fixed by the brain Codespace's `engine.env`, and the API reports those actual values. Client-provided `threads` or `hash_mb` fields are ignored.
 
 Example:
 
-\`\`\`bash
+```bash
 TOKEN="$(cat .secrets/api-token)"
 curl -fsS -X POST 'http://127.0.0.1:8765/v1/analyze' \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","movetime_ms":850}'
-\`\`\`
+```
 
 ## Streaming response
 
-\`POST /v1/analyze/stream\` returns HTTP/1.1 chunked NDJSON. Each line is one JSON event:
+`POST /v1/analyze/stream` returns HTTP/1.1 chunked NDJSON. Each line is one JSON event:
 
-- \`{"type":"info","data":{...}}\` — periodic depth, score, nodes, NPS, time, and PV updates.
-- \`{"type":"result","data":{...}}\` — final best move and PV; includes \`cancelled\`.
-- \`{"type":"error","data":{"message":"..."}}\` — search failure.
+- `{"type":"info","data":{...}}` — periodic depth, score, nodes, NPS, time, and PV updates.
+- `{"type":"result","data":{...}}` — final best move and PV; includes `cancelled`.
+- `{"type":"error","data":{"message":"..."}}` — search failure.
 
-The result contains UCI moves in \`bestmove\`, \`ponder\`, and \`pv\`. \`score_cp\` is centipawns and \`score_mate\` is set for mate scores. \`score_perspective\` is \`side_to_move\`. The response includes server-owned \`threads\` and \`hash_mb\`.
+The result contains UCI moves in `bestmove`, `ponder`, and `pv`. `score_cp` is centipawns and `score_mate` is set for mate scores. `score_perspective` is `side_to_move`. The response includes server-owned `threads` and `hash_mb`.
 
 To cancel the matching stream:
 
-\`\`\`bash
+```bash
 curl -fsS -X POST http://127.0.0.1:8765/v1/stop \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"search_id":"your-search-id"}'
-\`\`\`
+```
 
-Hash clear and new-game commands take an empty JSON body \`{}\`. The service serializes engine access and returns \`429\` when a control command races an active search; the client should stop/finish the search and retry.
+Hash clear and new-game commands take an empty JSON body `{}`. The service serializes engine access and returns `429` when a control command races an active search; the client should stop/finish the search and retry.
 
 ## Status codes
 
 | HTTP | Meaning |
 |---|---|
-| \`200\` | Request completed or control accepted |
-| \`400\` | Invalid JSON, FEN, UCI history, or request field |
-| \`401\` | Missing or incorrect bearer token |
-| \`404\` | Unknown endpoint |
-| \`413\` | Missing or oversized request body |
-| \`429\` | Engine is busy; retry after the active search stops |
-| \`503\` | Authentication, engine, or server configuration failure |
+| `200` | Request completed or control accepted |
+| `400` | Invalid JSON, FEN, UCI history, or request field |
+| `401` | Missing or incorrect bearer token |
+| `404` | Unknown endpoint |
+| `413` | Missing or oversized request body |
+| `429` | Engine is busy; retry after the active search stops |
+| `503` | Authentication, engine, or server configuration failure |
 
 Only one Stockfish search runs at a time because the brain owns a single persistent UCI process. Syzygy endgame tablebase lookup remains in the Android app; entering endgame mode clears the brain's Stockfish hash without changing its configured hash allocation.
