@@ -28,8 +28,10 @@ class EngineApiTest(unittest.TestCase):
     def setUpClass(cls):
         cls.port = free_port()
         env = os.environ.copy()
+        fake_engine = ROOT / "tests" / "fake_stockfish.py"
+        fake_engine.chmod(fake_engine.stat().st_mode | 0o111)
         env.update({
-            "SF_ENGINE": str(ROOT / "tests" / "fake_stockfish.py"),
+            "SF_ENGINE": str(fake_engine),
             "SF_THREADS": "2",
             "SF_HASH_MB": "3328",
             "SF_MAX_MOVETIME_MS": "30000",
