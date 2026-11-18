@@ -47,8 +47,11 @@ ENGINE_BIN="$ENGINE_DIR/src/stockfish"
 if [[ ! -x "$ENGINE_BIN" ]]; then
   if [[ -d "$ENGINE_DIR/.git" ]]; then
     log 'Updating existing Stockfish checkout to the sf_19 tag.'
-    git -C "$ENGINE_DIR" fetch --depth=1 origin tag sf_19
-    git -C "$ENGINE_DIR" checkout --force sf_19
+    # The persistent /config volume may have been created by another UID.
+    # Mark only this one checkout safe for these Git commands.
+    git -c safe.directory="$ENGINE_DIR" -C "$ENGINE_DIR" remote set-url origin https://github.com/official-stockfish/Stockfish.git
+    git -c safe.directory="$ENGINE_DIR" -C "$ENGINE_DIR" fetch --depth=1 origin tag sf_19
+    git -c safe.directory="$ENGINE_DIR" -C "$ENGINE_DIR" checkout --force sf_19
   else
     rm -rf "$ENGINE_DIR"
     log 'Fetching official Stockfish 19 source.'
