@@ -11,7 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check bootstrap shell syntax
-        run: bash -n vps.sh
+      - name: Check shell syntax
+        run: |
+          bash -n vps.sh
+          bash -n container.sh
+          bash -n container-run.sh
       - name: Check API Python syntax
         run: python3 -m py_compile engine_api.py
