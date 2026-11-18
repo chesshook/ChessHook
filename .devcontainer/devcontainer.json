@@ -4,8 +4,7 @@
   "portsAttributes": {
     "8765": {
       "label": "ChessHook Stockfish API",
-      "onAutoForward": "notify",
-      "visibility": "private"
+      "onAutoForward": "notify"
     }
   }
 }
