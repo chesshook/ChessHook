@@ -53,7 +53,7 @@ fi
 (( CPU_COUNT < 1 )) && CPU_COUNT=1
 # Conservative default for containerized VPS environments. Increase explicitly
 # after verifying the provider's real CPU/process limits.
-ENGINE_THREADS="${CHESSHOOK_THREADS:-8}"
+ENGINE_THREADS="${CHESSHOOK_THREADS:-4}"
 [[ "$ENGINE_THREADS" =~ ^[0-9]+$ ]] && (( ENGINE_THREADS >= 1 && ENGINE_THREADS <= 512 )) || die 'CHESSHOOK_THREADS must be an integer from 1 to 512.'
 
 # Effective available RAM, constrained by cgroup-v2 memory.max where present.
@@ -78,7 +78,7 @@ MEM_MB=$((MEM_BYTES / 1048576))
 (( MEM_MB >= 2048 )) || die "Only ${MEM_MB} MiB effective available RAM is visible; need at least 2 GiB."
 # Start with an 8 GiB hash table by default. Override only after verifying
 # the actual provider/container memory behavior: CHESSHOOK_HASH_MB=16384, etc.
-HASH_MB="${CHESSHOOK_HASH_MB:-8192}"
+HASH_MB="${CHESSHOOK_HASH_MB:-4096}"
 [[ "$HASH_MB" =~ ^[0-9]+$ ]] && (( HASH_MB >= 512 && HASH_MB <= 131072 )) || die 'CHESSHOOK_HASH_MB must be 512..131072 MiB.'
 (( HASH_MB < MEM_MB / 2 )) || die "Requested Hash ${HASH_MB} MiB is too close to or above half of detected available RAM (${MEM_MB} MiB); lower CHESSHOOK_HASH_MB."
 
@@ -123,9 +123,9 @@ UCI_ID="$(grep -m1 '^id name ' <<<"$UCI_CHECK")"
 # This catches engine crashes during large memory/thread initialization with a
 # clear diagnostic, instead of failing inside the HTTP server constructor.
 log "Testing Stockfish initialization with Threads=$ENGINE_THREADS and Hash=$HASH_MB MiB."
-UCI_RESOURCE_CHECK="$(printf 'uci\nsetoption name Threads value %s\nsetoption name Hash value %s\nisready\nquit\n' "$ENGINE_THREADS" "$HASH_MB" | timeout 120 "$ENGINE_BIN" 2>&1)" || {
+UCI_RESOURCE_CHECK="$(printf 'uci\nsetoption name NumaPolicy value none\nsetoption name Threads value %s\nsetoption name Hash value %s\nisready\nquit\n' "$ENGINE_THREADS" "$HASH_MB" | timeout 120 "$ENGINE_BIN" 2>&1)" || {
   printf '%s\n' "$UCI_RESOURCE_CHECK" | tail -n 40
-  die 'Stockfish exited during Threads/Hash preflight. Retry with CHESSHOOK_THREADS=4 CHESSHOOK_HASH_MB=4096.'
+  die 'Stockfish exited during Threads/Hash/NUMA preflight. Keep CHESSHOOK_THREADS=4 CHESSHOOK_HASH_MB=4096 and inspect the output above.'
 }
 grep -q 'readyok' <<<"$UCI_RESOURCE_CHECK" || {
   printf '%s\n' "$UCI_RESOURCE_CHECK" | tail -n 40
