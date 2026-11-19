@@ -123,7 +123,20 @@ UCI_ID="$(grep -m1 '^id name ' <<<"$UCI_CHECK")"
 # This catches engine crashes during large memory/thread initialization with a
 # clear diagnostic, instead of failing inside the HTTP server constructor.
 log "Testing Stockfish initialization with Threads=$ENGINE_THREADS and Hash=$HASH_MB MiB."
-UCI_RESOURCE_CHECK="$(printf 'uci\nsetoption name NumaPolicy value none\nsetoption name Threads value %s\nsetoption name Hash value %s\nisready\nquit\n' "$ENGINE_THREADS" "$HASH_MB" | timeout 120 "$ENGINE_BIN" 2>&1)" || {
+UCI_RESOURCE_CHECK="$(
+  {
+    printf 'uci\n'
+    sleep 2
+    printf 'setoption name NumaPolicy value none\n'
+    printf 'setoption name Threads value %s\n' "$ENGINE_THREADS"
+    sleep 2
+    printf 'setoption name Hash value %s\n' "$HASH_MB"
+    sleep 3
+    printf 'isready\n'
+    sleep 3
+    printf 'quit\n'
+  } | timeout 120 "$ENGINE_BIN" 2>&1
+)" || {
   printf '%s\n' "$UCI_RESOURCE_CHECK" | tail -n 40
   die 'Stockfish exited during Threads/Hash/NUMA preflight. Keep CHESSHOOK_THREADS=4 CHESSHOOK_HASH_MB=4096 and inspect the output above.'
 }
