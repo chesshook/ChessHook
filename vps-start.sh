@@ -1,40 +1,42 @@
 #!/usr/bin/env bash
-# ChessHook VPS bootstrap: install/build Stockfish 19, start authenticated API,
-# and expose it only through private Tailscale Serve.
+# Fast, repeatable ChessHook VPS bootstrap.
+# Uses the official Stockfish 19 universal binary (no long source compilation).
 set -Eeuo pipefail
 
 REPO_URL="https://github.com/chesshook/ChessHook.git"
 REPO_BRANCH="feature/ctf-remote-stockfish-offload"
-ROOT="/opt/chesshook"
+ROOT="${CHESSHOOK_ROOT:-/config/chesshook}"
 CACHE="$ROOT/.cache/chesshook"
-ENGINE_DIR="$CACHE/Stockfish"
-ENGINE_BIN="$ENGINE_DIR/src/stockfish"
+ENGINE_BIN="$CACHE/Stockfish/src/stockfish"
 TOKEN_FILE="$ROOT/.secrets/api-token"
 ENV_FILE="$CACHE/engine.env"
+TS_STATE_DIR="$ROOT/.tailscale"
+TS_STATE="$TS_STATE_DIR/tailscaled.state"
+TS_SOCKET="/var/run/tailscale/tailscaled.sock"
 
 log() { printf '\n[chesshook-vps] %s\n' "$*"; }
 die() { printf '\n[chesshook-vps] ERROR: %s\n' "$*" >&2; exit 1; }
-
 [[ "${EUID:-$(id -u)}" -eq 0 ]] || die 'Run this from a root shell.'
 
 export DEBIAN_FRONTEND=noninteractive
-log 'Installing required build/runtime packages.'
 apt-get update -y
-apt-get install -y --no-install-recommends ca-certificates curl git build-essential python3 procps
+apt-get install -y --no-install-recommends ca-certificates curl git python3 procps
 
-# Clone/update the backend branch.
+# Keep generated files under /config, which is the VPS user's visible data area.
+mkdir -p "$(dirname "$ROOT")"
 if [[ -d "$ROOT/.git" ]]; then
+  log 'Updating existing ChessHook backend checkout.'
   git -C "$ROOT" fetch --depth=1 origin "$REPO_BRANCH"
   git -C "$ROOT" checkout -B "$REPO_BRANCH" FETCH_HEAD
 else
-  mkdir -p "$(dirname "$ROOT")"
-  if [[ -e "$ROOT" ]]; then
-    mv "$ROOT" "${ROOT}.backup.$(date +%s)"
-  fi
+  [[ ! -e "$ROOT" ]] || mv "$ROOT" "${ROOT}.backup.$(date +%s)"
   git clone --depth=1 --branch "$REPO_BRANCH" "$REPO_URL" "$ROOT"
 fi
 
-# Respect cgroup CPU quota, then use all CPUs visible to the container.
+mkdir -p "$CACHE/Stockfish/src" "$ROOT/.secrets" "$TS_STATE_DIR"
+chmod 0700 "$ROOT/.secrets" "$TS_STATE_DIR"
+
+# Respect cgroup CPU quota; use available CPUs for runtime Stockfish Threads.
 CPU_COUNT="$(nproc)"
 if [[ -r /sys/fs/cgroup/cpu.max ]]; then
   read -r CPU_QUOTA CPU_PERIOD < /sys/fs/cgroup/cpu.max
@@ -46,8 +48,10 @@ if [[ -r /sys/fs/cgroup/cpu.max ]]; then
 fi
 (( CPU_COUNT > 64 )) && CPU_COUNT=64
 (( CPU_COUNT < 1 )) && CPU_COUNT=1
+ENGINE_THREADS="${CHESSHOOK_THREADS:-$CPU_COUNT}"
+[[ "$ENGINE_THREADS" =~ ^[0-9]+$ ]] && (( ENGINE_THREADS >= 1 && ENGINE_THREADS <= 512 )) || die 'CHESSHOOK_THREADS must be an integer from 1 to 512.'
 
-# Calculate effective free RAM, respecting cgroup-v2 limits on parent cgroups.
+# Effective available RAM, constrained by cgroup-v2 memory.max where present.
 MEM_BYTES=$(( $(awk '/^MemAvailable:/ {print $2}' /proc/meminfo) * 1024 ))
 CG2_REL="$(awk -F: '$1 == 0 {print $3; exit}' /proc/self/cgroup 2>/dev/null || true)"
 if [[ -n "$CG2_REL" ]]; then
@@ -66,121 +70,129 @@ if [[ -n "$CG2_REL" ]]; then
   done
 fi
 MEM_MB=$((MEM_BYTES / 1048576))
-(( MEM_MB >= 3072 )) || die "Only ${MEM_MB} MiB effective free RAM is visible; need at least 3 GiB."
+(( MEM_MB >= 2048 )) || die "Only ${MEM_MB} MiB effective available RAM is visible; need at least 2 GiB."
 HASH_MB=$(( MEM_MB * 65 / 100 ))
 HASH_MB=$(( HASH_MB / 1024 * 1024 ))
 (( HASH_MB < 1024 )) && HASH_MB=1024
 (( HASH_MB > 65536 )) && HASH_MB=65536
 
-mkdir -p "$CACHE" "$ROOT/.secrets"
-
-# Build official Stockfish 19. Verify the executable identity, not just its path.
+# Download pinned official Stockfish 19 universal binary. It selects the best
+# supported x86-64 instruction set at runtime, avoiding risky -march=native
+# binaries and the long compiler job that was interrupted in the web terminal.
+MACHINE_ARCH="$(uname -m)"
+case "$MACHINE_ARCH" in
+  x86_64) SF_ARCH="x86-64" ;;
+  aarch64|arm64) SF_ARCH="arm64" ;;
+  riscv64) SF_ARCH="riscv64" ;;
+  *) die "Unsupported VPS architecture: $MACHINE_ARCH" ;;
+esac
+SF_URL="https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-linux-${SF_ARCH}-universal.tar.gz"
 ENGINE_OK=0
 if [[ -x "$ENGINE_BIN" ]]; then
   UCI_ID="$(printf 'uci\nquit\n' | timeout 20 "$ENGINE_BIN" 2>/dev/null | grep -m1 '^id name ' || true)"
   [[ "$UCI_ID" == *'Stockfish 19'* ]] && ENGINE_OK=1
 fi
 if (( ENGINE_OK == 0 )); then
-  rm -rf "$ENGINE_DIR"
-  log 'Fetching official Stockfish tag sf_19 and compiling a native binary.'
-  git clone --depth=1 --branch sf_19 https://github.com/official-stockfish/Stockfish.git "$ENGINE_DIR"
-  make -C "$ENGINE_DIR/src" -j"$CPU_COUNT" build ARCH=native
+  log "Downloading official Stockfish 19 universal binary for $MACHINE_ARCH."
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "${TMP_DIR:-}"' EXIT
+  curl -fL --retry 3 --connect-timeout 20 "$SF_URL" -o "$TMP_DIR/stockfish.tar.gz"
+  tar -xzf "$TMP_DIR/stockfish.tar.gz" -C "$TMP_DIR"
+  CANDIDATE="$TMP_DIR/stockfish/stockfish-linux-${SF_ARCH}-universal"
+  [[ -x "$CANDIDATE" ]] || CANDIDATE="$(find "$TMP_DIR" -type f -perm /111 -print -quit)"
+  [[ -n "$CANDIDATE" && -x "$CANDIDATE" ]] || die 'Could not locate the executable in the official Stockfish archive.'
+  UCI_ID="$(printf 'uci\nquit\n' | timeout 20 "$CANDIDATE" 2>/dev/null | grep -m1 '^id name ' || true)"
+  [[ "$UCI_ID" == *'Stockfish 19'* ]] || die "Downloaded executable did not identify as Stockfish 19 (reported: $UCI_ID)."
+  install -m 0755 "$CANDIDATE" "$ENGINE_BIN"
+  rm -rf "$TMP_DIR"
+  trap - EXIT
 fi
 UCI_CHECK="$(printf 'uci\nisready\nquit\n' | timeout 30 "$ENGINE_BIN" 2>&1 || true)"
-grep -q 'id name Stockfish 19' <<<"$UCI_CHECK" || die 'The binary did not identify itself as Stockfish 19.'
+grep -q '^id name Stockfish 19' <<<"$UCI_CHECK" || die 'Stockfish 19 UCI verification failed.'
 grep -q 'uciok' <<<"$UCI_CHECK" || die 'Stockfish UCI handshake failed.'
 grep -q 'readyok' <<<"$UCI_CHECK" || die 'Stockfish readiness check failed.'
 UCI_ID="$(grep -m1 '^id name ' <<<"$UCI_CHECK")"
 
-# Preserve token on persistent disks. If this VPS loses its disk, re-enter the
-# saved app token at the prompt to keep the Android configuration unchanged.
-TOKEN_CREATED=0
+# Preserve API bearer across resets. Reuse an existing client token or generate
+# a new one once; it is stored only under /config/chesshook/.secrets.
 if [[ ! -s "$TOKEN_FILE" ]]; then
-  printf '\nNo saved ChessHook API token was found.\n'
-  read -r -s -p 'Existing API bearer token (press Enter to generate a new one): ' EXISTING_TOKEN
+  printf '\nNo saved API token found. Enter the existing ChessHook token to retain app settings,\nor press Enter to generate a new token.\n'
+  read -r -s -p 'Existing API bearer token (hidden): ' EXISTING_TOKEN
   printf '\n'
   if [[ -n "$EXISTING_TOKEN" ]]; then
     printf '%s\n' "$EXISTING_TOKEN" > "$TOKEN_FILE"
     unset EXISTING_TOKEN
   else
     python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > "$TOKEN_FILE"
-    TOKEN_CREATED=1
-    log 'Generated a new API bearer token. It will be displayed once at the end.'
+    log 'Generated a new API bearer token.'
   fi
-  chmod 0600 "$TOKEN_FILE"
 fi
-chmod 0700 "$ROOT/.secrets"
 chmod 0600 "$TOKEN_FILE"
-printf 'SF_THREADS=%s\nSF_HASH_MB=%s\n' "$CPU_COUNT" "$HASH_MB" > "$ENV_FILE"
+printf 'SF_THREADS=%s\nSF_HASH_MB=%s\n' "$ENGINE_THREADS" "$HASH_MB" > "$ENV_FILE"
 chmod 0600 "$ENV_FILE"
 
-# Install Tailscale if absent.
+# Tailscale state is kept under /config so a session/container reset can reuse
+# the node identity when /config is persistent.
 if ! command -v tailscale >/dev/null 2>&1; then
-  log 'Installing Tailscale using its official Linux installer.'
+  log 'Installing Tailscale.'
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
-
-mkdir -p /var/lib/tailscale /var/run/tailscale
-if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
-  systemctl enable --now tailscaled || true
+mkdir -p /var/run/tailscale
+# Use our persistent state file/socket, rather than an ephemeral /var/lib state.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now tailscaled.service >/dev/null 2>&1 || true
 fi
-if ! pgrep -x tailscaled >/dev/null 2>&1; then
-  if [[ -c /dev/net/tun ]]; then
-    TS_MODE=()
-  else
-    TS_MODE=(--tun=userspace-networking)
-    log 'No /dev/net/tun detected; using Tailscale userspace networking.'
-  fi
-  nohup tailscaled "${TS_MODE[@]}" --state=/var/lib/tailscale/tailscaled.state \
-    --socket=/var/run/tailscale/tailscaled.sock \
-    >/var/log/tailscaled.log 2>&1 </dev/null &
+pkill -x tailscaled 2>/dev/null || true
+if [[ -c /dev/net/tun ]]; then
+  TS_MODE=()
+else
+  TS_MODE=(--tun=userspace-networking)
+  log 'No /dev/net/tun found; starting Tailscale in userspace mode.'
 fi
-
+nohup tailscaled "${TS_MODE[@]}" --state="$TS_STATE" --socket="$TS_SOCKET" \
+  >/var/log/chesshook-tailscaled.log 2>&1 </dev/null &
+TS_PID=$!
 TS_READY=0
 for _ in $(seq 1 30); do
-  if tailscale status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("BackendState")=="Running" else 1)' 2>/dev/null; then
+  if [[ -S "$TS_SOCKET" ]] && tailscale --socket="$TS_SOCKET" status --json >/dev/null 2>&1; then
     TS_READY=1
     break
   fi
+  kill -0 "$TS_PID" 2>/dev/null || { tail -n 60 /var/log/chesshook-tailscaled.log || true; die 'tailscaled failed to start.'; }
   sleep 1
 done
+(( TS_READY == 1 )) || die 'Tailscale daemon did not become ready.'
+ts() { tailscale --socket="$TS_SOCKET" "$@"; }
 
-if (( TS_READY == 0 )); then
-  printf '\nTailscale needs authentication. Create a pre-auth key in your Tailscale admin console.\n'
-  printf 'Paste it here (input hidden); it is not saved in this repository.\n'
-  read -r -s -p 'Tailscale auth key: ' TS_AUTH_KEY
+TS_RUNNING="$(ts status --json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("BackendState",""))')"
+if [[ "$TS_RUNNING" != "Running" ]]; then
+  printf '\nTailscale needs authentication. Use a fresh reusable, tag-restricted pre-auth key.\n'
+  read -r -s -p 'Tailscale auth key (hidden): ' TS_AUTH_KEY
   printf '\n'
-  [[ -n "$TS_AUTH_KEY" ]] || die 'No Tailscale auth key entered.'
-  tailscale up --auth-key="$TS_AUTH_KEY" --hostname=chesshook-vps
+  [[ -n "$TS_AUTH_KEY" ]] || die 'No Tailscale auth key supplied.'
+  ts up --auth-key="$TS_AUTH_KEY" --hostname=chesshook-vps
   unset TS_AUTH_KEY
 fi
 
-# Start the API; the existing launcher binds it to loopback only.
-log "Starting ChessHook API: Stockfish 19, ${CPU_COUNT} thread(s), Hash=${HASH_MB} MiB."
+# Start API on loopback and expose only through private Tailscale Serve.
+log "Starting ChessHook: $UCI_ID; Threads=$ENGINE_THREADS; Hash=$HASH_MB MiB."
 bash "$ROOT/codespace-start.sh"
+ts serve --bg http://127.0.0.1:8765
 
-# Expose only through private Tailscale HTTPS Serve.
-tailscale serve --bg http://127.0.0.1:8765
-
-HOSTNAME="$(tailscale status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("Self",{}).get("DNSName", "").rstrip("."))')"
-IPV4="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+TS_JSON="$(ts status --json)"
+HOSTNAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' <<<"$TS_JSON")"
+IPV4="$(ts ip -4 2>/dev/null | head -n1 || true)"
 TOKEN="$(cat "$TOKEN_FILE")"
 
 printf '\n============================================================\n'
 printf 'ChessHook VPS is ready.\n'
-printf 'Engine:       %s\n' "$UCI_ID"
-printf 'Threads:      %s\n' "$CPU_COUNT"
-printf 'Hash:         %s MiB\n' "$HASH_MB"
+printf 'Engine:       %s\nThreads:      %s\nHash:         %s MiB\n' "$UCI_ID" "$ENGINE_THREADS" "$HASH_MB"
 printf 'Tailscale IP: %s\n' "$IPV4"
 if [[ -n "$HOSTNAME" ]]; then
-  printf 'Brain URL:    https://%s\n' "$HOSTNAME"
-  printf 'Health:       https://%s/healthz\n' "$HOSTNAME"
+  printf 'Brain URL:    https://%s\nHealth:       https://%s/healthz\n' "$HOSTNAME" "$HOSTNAME"
 fi
-if (( TOKEN_CREATED == 1 )); then
-  printf 'NEW API token: %s\n' "$TOKEN"
-  printf 'Copy it into ChessHook > Brain Config and save it securely.\n'
-else
-  printf 'API token:    reused from the saved token file (not printed).\n'
-fi
-printf 'To rerun after a reset, execute the same bootstrap command again.\n'
+printf 'Persistent data: %s\n' "$ROOT"
+printf 'API token file:   %s\n' "$TOKEN_FILE"
+printf 'If a new token was created, copy it from the file into the Android app.\n'
 printf '============================================================\n'
+unset TOKEN
