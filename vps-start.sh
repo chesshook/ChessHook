@@ -37,7 +37,7 @@ mkdir -p "$CACHE/Stockfish/src" "$ROOT/.secrets" "$TS_STATE_DIR"
 chmod 0700 "$ROOT/.secrets" "$TS_STATE_DIR"
 
 touch "$ROOT/.gitignore"
-grep -qxF '.tailscale/' "$ROOT/.gitignore" || printf '%s\\n' '.tailscale/' >> "$ROOT/.gitignore"
+grep -qxF '.tailscale/' "$ROOT/.gitignore" || printf '%s\n' '.tailscale/' >> "$ROOT/.gitignore"
 
 # Respect cgroup CPU quota; use available CPUs for runtime Stockfish Threads.
 CPU_COUNT="$(nproc)"
@@ -123,12 +123,12 @@ UCI_ID="$(grep -m1 '^id name ' <<<"$UCI_CHECK")"
 # This catches engine crashes during large memory/thread initialization with a
 # clear diagnostic, instead of failing inside the HTTP server constructor.
 log "Testing Stockfish initialization with Threads=$ENGINE_THREADS and Hash=$HASH_MB MiB."
-UCI_RESOURCE_CHECK="$(printf 'uci\\nsetoption name Threads value %s\\nsetoption name Hash value %s\\nisready\\nquit\\n' "$ENGINE_THREADS" "$HASH_MB" | timeout 120 "$ENGINE_BIN" 2>&1)" || {
-  printf '%s\\n' "$UCI_RESOURCE_CHECK" | tail -n 40
+UCI_RESOURCE_CHECK="$(printf 'uci\nsetoption name Threads value %s\nsetoption name Hash value %s\nisready\nquit\n' "$ENGINE_THREADS" "$HASH_MB" | timeout 120 "$ENGINE_BIN" 2>&1)" || {
+  printf '%s\n' "$UCI_RESOURCE_CHECK" | tail -n 40
   die 'Stockfish exited during Threads/Hash preflight. Retry with CHESSHOOK_THREADS=4 CHESSHOOK_HASH_MB=4096.'
 }
 grep -q 'readyok' <<<"$UCI_RESOURCE_CHECK" || {
-  printf '%s\\n' "$UCI_RESOURCE_CHECK" | tail -n 40
+  printf '%s\n' "$UCI_RESOURCE_CHECK" | tail -n 40
   die 'Stockfish did not become ready with the requested resources. Retry with CHESSHOOK_THREADS=4 CHESSHOOK_HASH_MB=4096.'
 }
 
