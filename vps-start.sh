@@ -181,7 +181,7 @@ else
   TS_MODE=(--tun=userspace-networking)
   log 'No /dev/net/tun found; starting Tailscale in userspace mode.'
 fi
-nohup tailscaled "${TS_MODE[@]}" --state="$TS_STATE" --socket="$TS_SOCKET" \
+nohup tailscaled "${TS_MODE[@]}" --state="$TS_STATE" --statedir="$TS_STATE_DIR" --socket="$TS_SOCKET" \
   >/var/log/chesshook-tailscaled.log 2>&1 </dev/null &
 TS_PID=$!
 TS_READY=0
