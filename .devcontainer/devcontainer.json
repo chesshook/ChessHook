@@ -5,11 +5,12 @@
     "cpus": 2,
     "memory": "8gb"
   },
-  "forwardPorts": [8765],
-  "portsAttributes": {
-    "8765": {
-      "label": "ChessHook Stockfish API",
-      "onAutoForward": "notify"
+  "runArgs": [
+    "--device=/dev/net/tun"
+  ],
+  "features": {
+    "ghcr.io/tailscale/codespace/tailscale": {
+      "version": "latest"
     }
   },
   "postCreateCommand": "bash ./codespace.sh",

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  syntax:
+  syntax-and-api-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +16,8 @@ jobs:
           bash -n codespace.sh
           bash -n codespace-start.sh
       - name: Check Python syntax
-        run: python3 -m py_compile engine_api.py
+        run: python3 -m py_compile engine_api.py tests/test_engine_api.py tests/fake_stockfish.py
       - name: Validate devcontainer JSON
         run: python3 -m json.tool .devcontainer/devcontainer.json > /dev/null
+      - name: Run authenticated API integration tests
+        run: python3 -m unittest discover -s tests -v

@@ -1,77 +1,70 @@
-# ChessHook Stockfish 19 — GitHub Codespaces backend
+# ChessHook Stockfish 19 — Tailscale Codespaces brain
 
-This repository's deployment target is **GitHub Codespaces**. The supported Codespace profile is Ubuntu 24.04 with at least 2 vCPUs and 8 GB RAM.
+This repository runs a persistent Stockfish 19 UCI engine inside a GitHub Codespace and exposes an authenticated analysis API to the phone over a private Tailscale network. The backend performs chess-position analysis only; board detection, UI, and any local mobile automation remain on the client.
 
-The backend provides FEN-in / UCI best-move-out chess analysis using the official Stockfish 19 source. It is an analysis API only; it does not inspect another app's process memory, read a device screen, or automate moves in a client app.
+## Brain resources
 
-## Hardware profile
+The supported devcontainer profile is Ubuntu 24.04 with 2 vCPUs and 8 GB RAM. The installer detects the actual CPU quota and effective available memory, then writes fixed `SF_THREADS` and `SF_HASH_MB` values to the ignored `.cache/chesshook/engine.env`. Stockfish hash is limited to at most 65% of effective available memory, rounded down to 256 MiB, with a 4096 MiB cap. The phone's CPU-thread and RAM sliders do not override these server values.
 
-The supplied Codespace reports 2 vCPUs and approximately 8 GiB RAM. The installer:
-- Builds Stockfish 19 with `ARCH=native` using the CPU quota detected inside the Codespace (normally 2 build jobs and 2 engine threads)
-- Calculates currently available memory using `MemAvailable` and any visible cgroup v2 memory limit
-- Assigns at most 65% of that effective available memory to the Stockfish transposition hash, rounded down to a 256 MiB step and capped at 4096 MiB
-- Runs a single analysis search at a time, with requests capped at 30 seconds
+## Provision the Codespace
 
-This is not the previous 48-vCPU / 330-GB configuration. Codespaces does not expose that hardware to this workspace.
+1. In Tailscale, create a tag-restricted, one-off auth key for the brain device. Avoid reusable keys unless you have a specific managed-key process.
+2. In GitHub repository settings, add a **Codespaces** secret named `TS_AUTH_KEY` with that new key as its value. Do not put the key in this repository, `.devcontainer/devcontainer.json`, or a shell command.
+3. Rebuild the Codespace container so the Tailscale devcontainer feature is installed and can read the secret.
+4. In the Codespace terminal, run:
 
-## Install and start
+   ```bash
+   git pull --ff-only
+   bash ./codespace.sh
+   ```
 
-From the repository root inside the Codespace, run:
+The Tailscale feature starts the daemon and authenticates it using `TS_AUTH_KEY`. Its state is persisted for the Codespace. The build script installs dependencies, obtains the official Stockfish 19 `sf_19` source, compiles it natively, verifies UCI readiness, generates `.secrets/api-token` if absent, and starts the API.
+
+## Private networking
+
+The backend binds only to `127.0.0.1:8765`. `codespace-start.sh` configures Tailscale Serve to publish that local service over HTTPS to the tailnet:
 
 ```bash
-git pull --ff-only
-bash ./codespace.sh
+sudo tailscale serve status
 ```
 
-The installer installs build tools, clones the official Stockfish 19 `sf_19` tag into the ignored `.cache/chesshook/` directory, compiles it, verifies the UCI handshake, generates a strong random API token, and starts the HTTP service.
-
-The API token is stored in `.secrets/api-token` with mode `0600`. The `.secrets/` and `.cache/` directories are git-ignored. Do not remove the token file unless you intend to rotate the API credential.
-
-The devcontainer configuration requests the 2-vCPU / 8-GB Ubuntu profile, forwards port 8765, builds the backend after creation, and starts the API when the Codespace starts. These lifecycle settings apply to newly created or rebuilt Codespaces. In the already-running Codespace, run the commands above once. If port 8765 does not appear in the PORTS panel, add it manually there; the printed localhost URL may also trigger automatic forwarding. You can restart the already-built API with:
+Copy the `https://<device>.<tailnet>.ts.net` origin shown there. In ChessHook, open **Brain Config**, enter that origin and the bearer token from:
 
 ```bash
-bash ./codespace-start.sh
-```
-
-## Port access
-
-Port `8765` is forwarded automatically and is private by default. Use the forwarded HTTPS URL from the Codespaces **PORTS** panel.
-
-- Browser / GitHub-authenticated access: keep the port **Private**
-- External REST clients to a private forwarded port also need the current Codespaces `GITHUB_TOKEN` in an `X-Github-Token` header. That token changes when the Codespace is stopped and restarted.
-- For a phone app that cannot provide the rotating GitHub header, change port 8765 to **Public** in the PORTS panel. Public means anyone who knows the URL can reach it, so keep the ChessHook bearer token secret. Analysis requests still require `Authorization: Bearer YOUR_CHESSHOOK_API_TOKEN`.
-
-Do not commit `.secrets/api-token`, copy it into source code, or put it in a public issue.
-
-## API
-
-- Health check: `GET /healthz`
-- Analysis: `POST /v1/analyze`
-
-See [API.md](API.md) for the exact request / response format and authentication requirements.
-
-Example local test from the Codespace:
-
-```bash
-TOKEN="$(cat .secrets/api-token)"
-curl -fsS http://127.0.0.1:8765/healthz
-curl -fsS -X POST http://127.0.0.1:8765/v1/analyze \
-  -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","movetime_ms":1000}'
-```
-
-## Logs and process control
-
-```bash
-tail -n 100 codespace-api.log
 cat .secrets/api-token
-kill "$(cat codespace-api.pid)"
+```
+
+Then enable **CTF OFFLOAD**. Keep Codespaces port `8765` private/not publicly forwarded, and do not use Tailscale Funnel. Tailscale Serve is tailnet-only and remains subject to tailnet access-control rules; HTTPS certificates must be enabled for the tailnet.
+
+For local diagnostics inside the Codespace:
+
+```bash
+curl -fsS http://127.0.0.1:8765/healthz
+tail -n 100 codespace-api.log
+```
+
+Restart the API after changing code or server resource configuration:
+
+```bash
 bash ./codespace-start.sh
 ```
 
-## Codespaces lifecycle limitation
+## API and client behavior
 
-A Codespace is a development environment, not a continuously available VPS. By default, an inactive Codespace stops after 30 minutes, and a Codespace has a 12-hour maximum lifetime. When it stops, the API process also stops; it restarts when the Codespace starts again through the devcontainer lifecycle hook. The workspace and ignored token file normally persist across a stop/start, but a deleted/recreated Codespace is a new environment and needs setup again.
+The Android client sends FEN, the move history needed to reconstruct the position, and the selected move time. The API streams Stockfish depth/evaluation/PV updates and supports search cancellation, `ucinewgame`, and Clear Hash. The server owns all Stockfish threads and hash. The app's time presets, look-ahead/ponder searches, and PV-chain display continue to use the remote results. Syzygy endgame lookups remain on the phone; the app clears the remote Stockfish hash when entering its Syzygy endgame mode.
 
-GitHub's lifecycle documentation: [Codespace lifecycle](https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle) · [Port forwarding](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace).
+See [API.md](API.md) for the complete request and response contract.
+
+## Validation
+
+Run the backend API tests with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The tests use a small fake UCI process and do not download or compile Stockfish.
+
+## Codespaces lifecycle
+
+Codespaces can stop when idle and have a maximum lifetime. The API is unavailable while its Codespace is stopped; it starts again through the devcontainer's `postStartCommand`. For an always-on production engine, deploy the same API and Stockfish process on an always-on host in the same tailnet.
