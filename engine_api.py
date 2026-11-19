@@ -338,10 +338,15 @@ class Handler(BaseHTTPRequestHandler):
             return False
         supplied = self.headers.get("Authorization", "")
         if not hmac.compare_digest(supplied, "Bearer " + API_TOKEN):
+            # The auth check runs before the JSON body is read. Close the
+            # connection on 401 so unread request bytes cannot be parsed as a
+            # subsequent HTTP request line (observed with Android keep-alive).
+            self.close_connection = True
             self.send_response(401)
             self.send_header("WWW-Authenticate", "Bearer")
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
             self.end_headers()
             return False
         return True
