@@ -36,6 +36,9 @@ fi
 mkdir -p "$CACHE/Stockfish/src" "$ROOT/.secrets" "$TS_STATE_DIR"
 chmod 0700 "$ROOT/.secrets" "$TS_STATE_DIR"
 
+touch "$ROOT/.gitignore"
+grep -qxF '.tailscale/' "$ROOT/.gitignore" || printf '%s\\n' '.tailscale/' >> "$ROOT/.gitignore"
+
 # Respect cgroup CPU quota; use available CPUs for runtime Stockfish Threads.
 CPU_COUNT="$(nproc)"
 if [[ -r /sys/fs/cgroup/cpu.max ]]; then
