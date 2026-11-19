@@ -135,6 +135,10 @@ class UCIEngine:
         self._reader_thread.start()
         self.send("uci")
         self.wait_for("uciok", 30)
+        # Disable automatic NUMA binding. Some containerized VPS environments
+        # expose synthetic multi-node topology that makes Stockfish thread
+        # initialization fail; this was verified with Stockfish 19 on the VPS.
+        self.send("setoption name NumaPolicy value none")
         self.send(f"setoption name Threads value {THREADS}")
         self.send(f"setoption name Hash value {HASH_MB}")
         self.send("setoption name MultiPV value 1")
